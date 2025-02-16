@@ -12,11 +12,46 @@ import {
   isCommit,
 } from '../lexicon/types/com/atproto/sync/subscribeRepos'
 import { Database } from '../db'
+import { subState as subStateTable } from '../db/schema'
+import { Agent } from '@atproto/api'
+import DataLoader from 'dataloader'
+import { LRUCache } from 'lru-cache'
+import { PostView } from '@atproto/api/dist/client/types/app/bsky/feed/defs'
 
 export abstract class FirehoseSubscriptionBase {
   public sub: Subscription<RepoEvent>
 
-  constructor(public db: Database, public service: string) {
+  public postLoader: DataLoader<string, PostView | undefined, string>
+
+  constructor(
+    public db: Database,
+    public atpAgent: Agent,
+    public service: string,
+  ) {
+    this.postLoader = new DataLoader(
+      async (uri: string[]) => {
+        let res: Awaited<ReturnType<typeof atpAgent.getPosts>> | undefined
+        try {
+          res = await atpAgent.getPosts({ uris: uri })
+        } catch (err) {
+          console.error(err)
+        }
+
+        const postsByUid = Object.fromEntries(
+          res?.success ? res.data.posts.map((e) => [e.uri, e]) : [],
+        )
+
+        return uri.map((u) => postsByUid[u])
+      },
+      {
+        maxBatchSize: 20,
+        cacheMap: new LRUCache<string, any>({
+          max: 5000,
+        }),
+        batchScheduleFn: (callback) => setTimeout(callback, 100),
+      },
+    )
+
     this.sub = new Subscription({
       service: service,
       method: ids.ComAtprotoSyncSubscribeRepos,
@@ -58,18 +93,17 @@ export abstract class FirehoseSubscriptionBase {
 
   async updateCursor(cursor: number) {
     await this.db
-      .updateTable('sub_state')
-      .set({ cursor })
-      .where('service', '=', this.service)
-      .execute()
+      .insert(subStateTable)
+      .values({ service: this.service, cursor })
+      .onConflictDoUpdate({ target: subStateTable.service, set: { cursor } })
   }
 
   async getCursor(): Promise<{ cursor?: number }> {
-    const res = await this.db
-      .selectFrom('sub_state')
-      .selectAll()
-      .where('service', '=', this.service)
-      .executeTakeFirst()
+    const res = await this.db.query.subState.findFirst({
+      where(fields, { eq }) {
+        return eq(fields.service, this.service)
+      },
+    })
     return res ? { cursor: res.cursor } : {}
   }
 }

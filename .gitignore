@@ -132,3 +132,7 @@ dist
 # intellij
 .idea/
 *.iml
+
+# Drizzle
+drizzle/
+local/

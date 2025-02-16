@@ -1,8 +1,46 @@
 import dotenv from 'dotenv'
 import FeedGenerator from './server'
+import { createDb } from './db'
+import { posts as postsTable } from './db/schema'
+import { notInArray, desc, sql } from 'drizzle-orm'
+import { MediaSourceType } from './types'
+import { stat } from 'node:fs/promises'
 
 const run = async () => {
   dotenv.config()
+
+  setInterval(async () => {
+    try {
+      const db = createDb(process.env.FEEDGEN_SQLITE_LOCATION!)
+      db.delete(postsTable).where(
+        notInArray(postsTable.mediaSourceType, [
+          MediaSourceType.media,
+          MediaSourceType.mediaRepost,
+          MediaSourceType.linkToMediaSites,
+        ]),
+      )
+
+      await new Promise((resolve) => setTimeout(resolve, 10000))
+
+      const dbStat = await stat(process.env.FEEDGEN_SQLITE_LOCATION!)
+      const offset = 80000000
+
+      if (dbStat.size > 1000 * 1000 * 1000 * 30) {
+        const result = await db.run(
+          sql`DELETE FROM ${postsTable} ORDER BY ${postsTable.indexed} DESC LIMIT -1 OFFSET ${offset}`,
+        )
+
+        console.log(
+          `DB Cleanup on ${new Date().toISOString()}. Size: ${
+            dbStat.size
+          }, Offset: ${offset}, Changes: ${result.changes}`,
+        )
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }, 1000 * 60 * 15)
+
   const hostname = maybeStr(process.env.FEEDGEN_HOSTNAME) ?? 'example.com'
   const serviceDid =
     maybeStr(process.env.FEEDGEN_SERVICE_DID) ?? `did:web:${hostname}`

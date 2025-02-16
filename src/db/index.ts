@@ -1,20 +1,11 @@
-import SqliteDb from 'better-sqlite3'
-import { Kysely, Migrator, SqliteDialect } from 'kysely'
-import { DatabaseSchema } from './schema'
-import { migrationProvider } from './migrations'
+import Sqlite from 'better-sqlite3'
+import { drizzle } from 'drizzle-orm/better-sqlite3'
+import * as schema from './schema'
 
-export const createDb = (location: string): Database => {
-  return new Kysely<DatabaseSchema>({
-    dialect: new SqliteDialect({
-      database: new SqliteDb(location),
-    }),
-  })
+export const createDb = (location: string) => {
+  const client = new Sqlite(location)
+  client.pragma('journal_mode = WAL')
+  return drizzle({ client, schema })
 }
 
-export const migrateToLatest = async (db: Database) => {
-  const migrator = new Migrator({ db, provider: migrationProvider })
-  const { error } = await migrator.migrateToLatest()
-  if (error) throw error
-}
-
-export type Database = Kysely<DatabaseSchema>
+export type Database = ReturnType<typeof createDb>
